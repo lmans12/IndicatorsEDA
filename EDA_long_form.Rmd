@@ -1,0 +1,303 @@
+---
+title: "Exploratory Data Analysis"
+author: "Luke Mansour"
+date: "December 6, 2017"
+output: html_document
+---
+
+# Overview
+
+The goal of this paper is to present the findings of an exploratory data analysis of the World Development Indicators dataset by World Bank.  The analysis will also include the Human Development Indicator dataset.
+
+# Libraries and Data Loading
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(modelr)
+library(readr)
+
+HDI <- read_csv("~/Stat301/Final/data/unprocessed/HDI.csv")
+indicators <- read_csv("~/Stat301/Final/data/unprocessed/Indicators.csv")
+country_info <- read_csv("~/Stat301/Final/Country.csv")
+```
+
+# Data Tidying
+
+At first glance, the indicators dataset is very large and messy.  Due to processing and memory constraints, I was forced to hand pick a few indicators that I found from research to be usefull and well descriptive.  The first step is to filter these indicators out from the dataset.
+
+```{r}
+restricted_indicators <- indicators %>%
+  filter(IndicatorCode == "NY.GDP.MKTP.KD" | IndicatorCode == "NY.GDP.MKTP.CD" | 
+           IndicatorCode == "NY.GNP.MKTP.KD" | IndicatorCode == "NY.GNP.MKTP.CD" | 
+           IndicatorCode == "MY.GNP.PCAP.KD" | IndicatorCode == "NY.GNP.PCAP.CD" |
+           IndicatorCode == "SP.DYN.CBRT.IN" | IndicatorCode == "SP.DYN.CDRT.IN" | 
+           IndicatorCode == "SP.DYN.IMRT.IN" | IndicatorCode == "SE.ADT.1524.LT.FE.ZS" | 
+           IndicatorCode == "SE.ADT.1524.LT.MA.ZS" | IndicatorCode == "SE.ADT.1524.LT.ZS" |
+           IndicatorCode == "SP.DYN.LE00.IN" | IndicatorCode == "SP.DYN.LE00.MA.IN" | 
+           IndicatorCode == "SP.DYN.LE00.FE.IN" | IndicatorCode == "NY.GDP.PCAP.CD" | 
+           IndicatorCode == "NY.GDP.PCAP.KD")
+```
+
+Now that the dataset is in a more manageable size, we can see that the `IndicatorCode` column contains values that are actually variables themselves, not instances of a variable.  To fix this, we can use the `spread` function with IndicatorCode as the key and Value as the value.  
+
+```{r}
+spread_restricted_indicators <- restricted_indicators %>%
+  select(-IndicatorName) %>%
+  spread(key = IndicatorCode, value = Value)
+```
+
+It is now a good idea to choose better names for the indicators so that we don't have to reference them by their code each time.  
+
+```{r}
+tidy_indicators <- spread_restricted_indicators %>%
+  mutate(
+    gdp_constant = NY.GDP.MKTP.KD,
+    gdp_current = NY.GDP.MKTP.CD,
+    gnp_constant = NY.GNP.MKTP.KD,
+    gnp_current = NY.GNP.MKTP.CD,
+    birth_rate = SP.DYN.CBRT.IN,
+    death_rate = SP.DYN.CDRT.IN,
+    infant_mortality_rate = SP.DYN.IMRT.IN,
+    youth_lit_rate_female = SE.ADT.1524.LT.FE.ZS,
+    youth_lit_rate_male = SE.ADT.1524.LT.MA.ZS,
+    youth_lit_rate = SE.ADT.1524.LT.ZS,
+    life_exp = SP.DYN.LE00.IN,
+    life_exp_male = SP.DYN.LE00.MA.IN,
+    life_exp_female = SP.DYN.LE00.FE.IN,
+    gdp_per_capita_constant = NY.GDP.PCAP.KD,
+    gdp_per_capita_current = NY.GDP.PCAP.CD
+  ) %>%
+  select(CountryName, CountryCode, Year, gdp_constant, gdp_current, gnp_constant, gnp_current, birth_rate, death_rate, infant_mortality_rate,
+         youth_lit_rate_female, youth_lit_rate_male, youth_lit_rate, life_exp, life_exp_male, life_exp_female, gdp_per_capita_current,
+         gdp_per_capita_constant)
+```
+
+Now that the indicators dataset is in tidy form, we move on to tidying the HDI dataset.  First, we rename the columns, then we perform the necessary `gather` operation, and finally we convert the Year variable from a character vector to a numeric vector using `as.numeric`.
+
+```{r}
+colnames(HDI) = HDI[1,]
+HDI = HDI[-1,]
+hdi_tidy <- HDI %>%
+  gather(`1990`:`2015`, key = "Year", value = "hdi") %>%
+  mutate(year = as.numeric(Year)) %>%
+  select(-Year)
+```
+
+Now that `hdi_tidy` and `indicators_tidy` are in their proper forms, we can perform a join for future analysis.
+
+```{r}
+hdi_join <- tidy_indicators %>%
+  left_join(hdi_tidy, by = c("CountryName" = "Country", "Year" = "year"))
+```
+
+Finally, we extract the `Regions` variable from the `country_info` dataset and join it with `hdi_join`.
+
+```{r}
+regions <- country_info %>%
+  select(CountryCode, Region)
+EDA <- hdi_join %>%
+  left_join(regions, by = "CountryCode")
+```
+
+Now, `EDA` is in tidy form and we can begin our exploratory analysis.
+
+# Exploratory Data Analysis
+
+To become more familiar with the variables in the dataset, I picked a representative year (least NA values) and visualized the variables for that year using histograms.
+
+```{r, warning=FALSE}
+EDA %>%
+  group_by(Year) %>%
+  summarise(
+    missing_life_exp = sum(is.na(life_exp))
+  ) %>%
+  arrange(missing_life_exp)
+
+eda_2002 <- EDA %>%
+  filter(Year == 2002)
+
+ggplot(eda_2002, aes(gdp_constant)) +
+  geom_histogram(bins = 70)
+
+ggplot(eda_2002, aes(gnp_constant)) +
+  geom_histogram()
+```
+
+Immediately we see that this dataset has some very extreme outliers.  These outliers actually correspond to entities in the datasets that aren't countries (e.g. European Union and Top Income Bracket) along with countries like the US that have exceptionally high GDP.  To analyze the distributions more clearly, I decided to remove these outliers.  
+
+```{r, warning=FALSE}
+eda_2002_clean <- eda_2002 %>%
+  filter(gdp_constant < 1.2e+13)
+
+ggplot(eda_2002_clean, aes(gdp_constant)) +
+  geom_histogram(bins=50)
+
+ggplot(eda_2002_clean, aes(gnp_constant)) +
+  geom_histogram(bins=50)
+
+ggplot(eda_2002_clean, aes(death_rate)) +
+  geom_histogram(bins=10)
+
+ggplot(eda_2002_clean, aes(life_exp)) +
+  geom_histogram(bins=15)
+```
+
+We can still see that gdp and gnp are highly skewed with some extreme outliers.  However, we also see some very normally distributed variables including birth and death rate.  
+
+# Life Expectancy
+
+Now that we understand the variables, we can move on to the natural question of how life expectancy has changed over time for each country.
+
+```{r, warning=FALSE}
+EDA %>%
+  ggplot(aes(Year, life_exp, group = CountryName)) +
+  geom_line()
+
+EDA %>%
+  filter(CountryName == "Cambodia" | CountryName == "Rwanda" | CountryName == "United States") %>%
+  ggplot(aes(Year, life_exp, group = CountryName)) +
+  geom_line(aes(color = CountryName)) 
+```
+
+The plots above indicate that, on average, life expectancy has risen steadily since 1960 with some obvious outliers.  The second plot shows major dips in the life expectancy in Cambodia in 1977 and Rwanda in 1994.  These dips were caused by the Cambodian Civil War and famine in 1977 and the Rwandan Genocide of 1994.  
+
+# HDI
+
+Another natural question of interest is how the Human Development Index has changed over time.
+
+```{r, warning=FALSE}
+EDA %>%
+  filter(Year >= 1990) %>%
+  ggplot(aes(Year, hdi, group = CountryName)) +
+  geom_line()
+
+EDA %>%
+  group_by(Region) %>%
+  mutate(mean_hdi = mean(hdi, na.rm=TRUE)) %>%
+  ggplot(aes(Region, hdi)) +
+  geom_boxplot() +
+  coord_flip()
+```
+
+We can see a general upward sloping trend in the HDI of countries since 1990.  The boxplot suggests that a country's region is very indicative of its HDI (and consequently other indicators).  We see lower HDIs for countries in Sub-Saharan Africa and South Asia whereas North America, Europe and Central Asia seem to be well above average.  It should also be noted that Sub-Sarahan Africa has a very wide variance with some outliers on both ends as does East Asia and Pacific.  To uncover some of the more subtler trends, I fit a linear model to each country and analyze the residuals.  
+
+```{r, warning=FALSE}
+by_country <- EDA %>%
+  filter(Year >= 1990) %>%
+  group_by(CountryName, Region) %>%
+  mutate(flag = sum(!is.na(hdi))) %>%
+  filter(flag > 2) %>%
+  nest() %>%
+  filter(!is.na(Region)) # remove non-countries
+
+hdi_model <- function(df) {
+  lm(hdi ~ Year, data = df)
+}
+
+by_country <- by_country %>%
+  mutate(model = map(data, hdi_model))
+
+by_country <- by_country %>%
+  mutate(residuals = map2(data, model, add_residuals))
+
+residuals <- by_country %>%
+  unnest(residuals)
+
+residuals %>%
+  ggplot(aes(Year, resid)) +
+  geom_line(aes(group = CountryName)) +
+  geom_smooth()
+
+residuals %>%
+  group_by(CountryName) %>%
+  summarise(
+    abs_worst_resid = max(abs(resid))
+  ) %>%
+  arrange(desc(abs_worst_resid)) %>%
+  filter(abs_worst_resid > .04) %>%
+  ggplot(aes(CountryName, abs_worst_resid)) +
+  geom_point(size = 5, color = "blue") +
+  coord_flip()
+
+EDA %>%
+  filter(Year > 1990) %>%
+  filter(CountryName == "Tajikistan" | CountryName == "Zimbabwe" | CountryName == "Mongolia" | CountryName == "Rwanda") %>%
+  ggplot(aes(Year, hdi, group = CountryName, color = CountryName)) +
+  geom_line()
+```
+
+The final plot shows the hdi trends with some of the highest residual values, meaning that they deviated from the linear trend the most.  Again we can see the devastating effects of the Rwandan Genocide.  
+
+# GDP per Capita
+
+It is natural to assume some relationshp between the economic status (GDP) of a country and its human development (HDI).  
+
+```{r, warning=FALSE}
+EDA %>%
+  filter(Year == 2013, gdp_per_capita_constant < 10000) %>%
+  ggplot(aes(gdp_per_capita_constant, hdi)) +
+  geom_point() +
+  geom_smooth()
+```
+
+The plot above shows the logarthmic relationship between GDP per capita and HDI (after removing some GDP outliers).  To remove this strong relationship, I fit a linear model to the logarithm of GDP and analyze the residuals. 
+
+```{r, warning=FALSE}
+eda2 <- EDA %>%
+  mutate(lgdp = log(gdp_per_capita_constant))
+
+mod <- lm(hdi ~ lgdp, data = eda2)
+
+grid <- eda2 %>% 
+  data_grid(gdp = seq_range(gdp_per_capita_constant, 20)) %>%
+  mutate(lgdp = log(gdp)) %>%
+  add_predictions(mod)
+  
+ggplot(eda2, aes(lgdp, hdi)) +
+  geom_point() +
+  geom_line(data = grid, aes(lgdp, pred), color = "red", size = 1)
+
+eda2 <- eda2 %>%
+  add_residuals(mod)
+
+ggplot(eda2, aes(lgdp, resid)) +
+  geom_point()
+
+ggplot(eda2, aes(Region, resid)) +
+  geom_boxplot() +
+  coord_flip()
+```
+
+The residuals seem fairly random which implies that our linear model did a fairly good job in describing the relationship.  The last boxplot shows the residuals by Region and indicates that the model slightly overestimated the hdi of Sub-Saharan African countries.  
+
+# Population Growth Rate
+
+It seems likely that the growth rate of a country could have an interesting relationship with the life expectancy of that country.  To verify, I created a new variable `growth_rate` and plotted it against life expectancy.
+
+```{r, warning=FALSE}
+EDA %>%
+  mutate(
+    growth_rate = birth_rate - death_rate
+  ) %>%
+  filter(growth_rate < -10)
+
+EDA <- EDA %>%
+  mutate(growth_rate = birth_rate - death_rate)
+
+EDA %>%
+  ggplot(aes(growth_rate, life_exp)) +
+  geom_hex()
+
+EDA %>%
+  filter(!is.na(Region)) %>%
+  ggplot(aes(growth_rate, life_exp, color = Region)) +
+  geom_point(size=1, alpha = 1/2)
+```
+
+The nature of these plots thoroughly surprised me.  It seems that for countries with smaller growth rates, the life expectancy is relatively high.  However, as growth rate increases, we see an interesting split in life expectancy.  The last plot shows an interesting trend based on region.  You can clearly see that the majority of the data in the top left of the plot belongs to Europe and Central Asia while the bottom right of the plot belongs mostly to the Sub-Saharan African Countries.  A possible explaination for this trend is that countries with low (even negative) growth rates tend to have better resource allocation and can live more comfortably.  Countries with higher growth rates deal with overcrowding and limited resources.  This also shows how important a countries region is when analyzing indicators such as life expectancy.  
+
+
+
+
+
+
